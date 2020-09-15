@@ -7,7 +7,7 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 # from sklearn.pipeline import Pipeline
-from tools.featGen import get_norm_side, moskowitz_func, tanh_func, mrm_c
+from bt_tools.featGen import get_norm_side, moskowitz_func, tanh_func, mrm_c
 from scipy.stats.mstats import winsorize
 from sklearn.metrics import accuracy_score, r2_score
 from xgboost import XGBClassifier, XGBRegressor
