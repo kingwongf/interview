@@ -159,7 +159,7 @@ def dwnld_df(today):
 
 
 
-def get_df_stoxx(start_bt_date_1yr_plus='2007-01-01', end_bt_date='2010-01-01'):
+def get_df_stoxx600(start_bt_date_1yr_plus='2007-01-01', end_bt_date='2010-01-01'):
     ## redownload if today not exsits
     today = pd.datetime.today().date()
     try:
@@ -190,13 +190,26 @@ def get_df_stoxx(start_bt_date_1yr_plus='2007-01-01', end_bt_date='2010-01-01'):
 
     df.loc['2020-08-14', 'MNDI.L'] = 1529.000
 
+    df.loc[:'2012-05-21', 'KGHA.F'] = np.nan
+
+    df.loc['2020-09-09', 'BVIC.L'] = 857.5
+    df.loc['2020-09-09', 'EVR.L'] = 328.4000
+    df.loc['2020-09-09', 'BNZL.L'] = 2398.00
+    df.loc['2020-09-09', 'HAS.L'] = 120.0000
+    df.loc['2020-09-09', 'OMU.JO'] = 1155.00
+
+    df.loc['2007-02-19', 'GIVN.SW'] = 1112.47
+    df.loc['2007-04-25', 'GIVN.SW'] = 1185.32
+
+
+
 
     df = df[start_bt_date_1yr_plus:end_bt_date]
     df.dropna(how='all', axis=1, inplace=True)
 
     ## Stoxx 600, index price
     stoxx = yf.Ticker('^STOXX')
-    stoxx = stoxx.history(period="max")['Close']
+    stoxx = stoxx.history(period="max")['Close'][start_bt_date_1yr_plus:end_bt_date].ffill()
 
 
     return df, stoxx
@@ -211,31 +224,243 @@ def cont_trend_follow_sigs(df, freqs):
     fast, mid, slow = freqs
     return df.rolling(fast).mean().fillna(0) -  df.rolling(mid).mean().fillna(0),  df.rolling(mid).mean().fillna(0) - df.rolling(slow).mean().fillna(0)
 
+
+def _get_sp500_tickers():
+    tickers = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]['Symbol'].tolist()
+    tickers = list(map(lambda x: x.replace('.', '-'), tickers))
+    return tickers
+
 def get_df_sp500(start_bt_date_1yr_plus, end_bt_date):
+    return _get_df('sp500', start_bt_date_1yr_plus, end_bt_date)
+
+
+def df_sanity_check(df, date):
+    '''
+    To deal with Data Quality issues on Yahoo finance data, this function
+    returns the largest to lowest returns on a given date
+
+    df: price df
+    date: identify by eyeballing the largest jump in PnL chart
+    '''
+
+    return df.pct_change().loc[date].sort_values(ascending=False)
+
+def _get_nasdaq100_tickers(chromedriver=r"/Users/kingf.wong/Development/alphaNovaProject/chromedriver"):
+    ''' you'll need selenium and the chrome driver for this  '''
+
+    import pandas as pd
+    import time
+    from selenium import webdriver
+    from bs4 import BeautifulSoup
+    driver = webdriver.Chrome(chromedriver)
+    base_url = "https://www.nasdaq.com/market-activity/quotes/nasdaq-ndx-index"
+    driver.get(base_url)
+    time.sleep(12)
+    html = driver.page_source
+    soup = BeautifulSoup(html, 'html.parser')
+    div = soup.select_one("table")
+    tables = pd.read_html(str(div))
+
+    return tables[0]['Symbol'].tolist()
+
+
+def get_df_nasdaq100(start_bt_date_1yr_plus, end_bt_date):
+    return _get_df('nasdaq100', start_bt_date_1yr_plus, end_bt_date)
+
+
+def _replace_abnormal_prices(df):
+    ret = df.pct_change()
+    fwd_ret = ret.shift(-1)
+    ''' 
+                modify prices that are like the following
+
+                Date
+                2020-09-01    783.500
+                2020-09-02    789.000
+                2020-09-03    780.000
+                2020-09-04    769.500
+                2020-09-07    786.000
+                2020-09-08    792.500
+                2020-09-09      7.975
+                2020-09-10    791.000
+                2020-09-11    800.000
+                2020-09-14    795.500
+                2020-09-15    802.500
+                2020-09-16    789.500
+                Name: IGG.L, dtype: float64
+
+                to
+
+                Date
+                2020-09-01    783.5
+                2020-09-02    789.0
+                2020-09-03    780.0
+                2020-09-04    769.5
+                2020-09-07    786.0
+                2020-09-08    792.5
+                2020-09-09    792.5
+                2020-09-10    791.0
+                2020-09-11    800.0
+                2020-09-14    795.5
+                2020-09-15    802.5
+                2020-09-16    789.5
+                Name: IGG.L, dtype: float64
+
+                downside is it also changes the following
+
+                Date
+                2020-09-01      35.650002
+                2020-09-02      35.650002
+                2020-09-03      35.650002
+                2020-09-04      35.650002
+                2020-09-07      35.650002
+                2020-09-08      35.650002
+                2020-09-09      35.650002
+                2020-09-10      35.650002
+                2020-09-11      35.650002
+                2020-09-14      35.650002
+                2020-09-15      35.650002
+                2020-09-16    3575.000000
+
+                to
+
+
+
+                '''
+    for col in ret.columns:
+
+        problems_dates = fwd_ret[col][fwd_ret[col] > 1.0].index.tolist()
+        if problems_dates:
+
+
+            df[col].loc[problems_dates] = np.nan
+    df = df.ffill()
+    '''
+    Next we need to change the below
+    WWH.L
+    price
+    Date
+    2014-09-16            NaN
+    2014-09-17            NaN
+    2014-09-18            NaN
+    2014-09-19            NaN
+    2014-09-22            NaN
+             ...     
+    2020-09-10      35.650002
+    2020-09-11      35.650002
+    2020-09-14      35.650002
+    2020-09-15      35.650002
+    2020-09-16    3575.000000
+    
+    '''
+    ret = df.pct_change()
+    for col in ret.columns:
+
+        problems_dates = ret[col][ret[col] > 1.0].index.tolist()
+        if problems_dates:
+            df[col].loc[problems_dates] = np.nan
+    df = df.ffill()
+    return df
+
+def get_df_ftse250(start_bt_date_1yr_plus, end_bt_date):
+
+    df, b_df = _get_df('ftse250', start_bt_date_1yr_plus, end_bt_date)
+
+    ## drop bad ticker columns
+
+    df = df.drop(['ICGT.L', 'HILS.L'], axis=1)
+    # df.loc['2014-09-30','3IN.L'] = 1.871850*100
+
+    df.loc[:'2017-05-02', 'PSH.L'] = np.nan
+    df.loc['2020-09-02', 'UKW.L'] = 141.4000
+    df.loc['2020-09-08', 'UKW.L'] = 134.6
+
+
+    df.loc['2020-09-02', 'EQN.L'] = 110.0000
+    df.loc['2020-09-02', 'WIZZ.L'] = 3590.000
+
+
+    df.loc['2020-09-08', 'EQN.L'] = 113.4000
+
+    df.loc['2020-09-09', 'BVIC.L'] = 857.5
+    df.loc['2020-09-09', 'EVR.L'] = 328.4000
+    df.loc['2020-09-09', 'BNZL.L'] = 2398.00
+
+    df.loc['2020-07-22', 'CRDA.L'] = 5616.00
+
+
+    df.loc['2019-07-19', 'KGF.L'] = 218.6
+    df.loc['2019-07-19', 'TW.L'] = 165.00
+
+    df.loc['2020-08-14', 'DLN.L'] = 2816.0
+
+    df.loc['2020-09-02', 'EVR.L'] = 334.5000
+    df.loc['2020-09-08', 'EVR.L'] = 321.4000
+
+    df.loc['2020-08-14', 'MNDI.L'] = 1529.000
+
+    df = _replace_abnormal_prices(df)
+
+
+    return df[start_bt_date_1yr_plus:end_bt_date], b_df[start_bt_date_1yr_plus:end_bt_date]
+    # today = pd.datetime.today().date()
+    #
+    # try:
+    #     df = pd.read_pickle(f"closes_ftse250_{str(today)}.pkl")  # temp_close_stoxx600
+    # except Exception as e:
+    #     tickers = pd.read_html("https://en.wikipedia.org/wiki/FTSE_250_Index#cite_note-3")[1]['Ticker[4]'].tolist()
+    #     tickers = map(lambda x:x.upper() +'.L', tickers)
+    #     tickers_str = " ".join(tickers)
+    #     new_data = yf.download(tickers=tickers_str, period='max')
+    #     new_data.dropna(how='all', axis=1, inplace=True)
+    #     new_data['Close'].to_pickle(f"closes_ftse250_{str(today)}.pkl")
+    #
+    #     df = new_data['Close']
+    #
+    # df.ffill(inplace=True)
+    # df.dropna(how='all', axis=1, inplace=True)
+    #
+    # df.sort_index(inplace=True)
+    #
+    # df = df[start_bt_date_1yr_plus:end_bt_date]
+    # df.dropna(how='all', axis=1, inplace=True)
+    #
+    #
+    # ftse250 = yf.Ticker('^FTMC')
+    # ftse250 = ftse250.history(period="max")['Close']
+    #
+    # return df, ftse250
+
+
+def _get_ftse250_tickers():
+    tickers= pd.read_html("https://en.wikipedia.org/wiki/FTSE_250_Index#cite_note-3")[1]['Ticker[4]'].tolist()
+    return map(lambda x:x.upper().replace('.','') +'.L', tickers)
+
+def _get_df(index_name, start_bt_date_1yr_plus, end_bt_date):
+
     today = pd.datetime.today().date()
     try:
-        df = pd.read_pickle(f"closes_sp500_{str(today)}.pkl")  # temp_close_stoxx600
+        df = pd.read_pickle(f"closes_{index_name}_{str(today)}.pkl")  # temp_close_stoxx600
     except Exception as e:
-        dfs = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')
-        tickers = dfs[0]['Symbol'].tolist()
-        tickers = list(map(lambda x:x.replace('.','-'), tickers))
+        tickers = globals()[f"_get_{index_name}_tickers"]()
         tickers_str = " ".join(tickers)
         new_data = yf.download(tickers=tickers_str, period='max')
         new_data.dropna(how='all', axis=1, inplace=True)
-        new_data['Close'].to_pickle(f"closes_sp500_{str(today)}.pkl")
-
+        new_data['Close'].to_pickle(f"closes_{index_name}_{str(today)}.pkl")
         df = new_data['Close']
 
     df.ffill(inplace=True)
-    df.dropna(how='all', axis=1, inplace=True)
-
     df.sort_index(inplace=True)
 
-    df = df[start_bt_date_1yr_plus:end_bt_date]
+    df = df[start_bt_date_1yr_plus:end_bt_date] if index_name!='ftse250' else df
     df.dropna(how='all', axis=1, inplace=True)
 
+    index_dict  = {'ftse250':'^FTMC', 'sp500': 'SPY', 'nasdaq100':'^NDX'}
 
-    sp500 = yf.Ticker('SPY')
-    sp500 = sp500.history(period="max")['Close']
+    b_df = yf.Ticker(index_dict[index_name])
+    b_df = b_df.history(period="max")['Close']
 
-    return df, sp500
+    return df, b_df
+
+def print_sth():
+    print(globals())
