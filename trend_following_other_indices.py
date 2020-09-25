@@ -1,82 +1,74 @@
-
 import bt_tools
-
 import pandas as pd
 import numpy as np
-import json
-import statsmodels.api as sm
 import matplotlib.pyplot as plt
-import seaborn as sns
 from scipy.stats import mstats
-
+from matplotlib.lines import Line2D
+import seaborn as sns; sns.set_theme()
 
 def _bt_date():
     return pd.datetime.today().date(), "-".join([str(pd.datetime.today().date().year - 5), str(pd.datetime.today().date().month), str(pd.datetime.today().date().day)])
 
-def orig_long_trend_bt(df, b_df, sigs= (20,50,150), transaction_cost=0, plot=False):
+def orig_long_trend_bt(df, b_df, st_date, ed_date, sigs= (20,50,150), transaction_cost=0, plot=False, index_name=None):
+
+    fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(10, 3.5), dpi=800)
+
+    ax0s = []
 
 
-    temp_fast, temp_mid, temp_slow = bt_tools.trend_follow_sigs(df, sigs)
-
-
-    today, five_yrs_ago_date = _bt_date()
-    b_df = b_df[five_yrs_ago_date:]
+    b_df = b_df[st_date:ed_date]
     ret_b = b_df.pct_change().fillna(0)
 
-    ## Requested Portfolio
-    ## Long trend following, short index
-    ## equal weighted in stocks, and long short
+    port_ret = ret_b.rename('short').to_frame()
 
-    binary_signal = (temp_fast > temp_mid) & (temp_mid > temp_slow)
-    ret_df = df[five_yrs_ago_date:].pct_change(1).fillna(0)
-
-    arr_transaction_cost = [0, 0, 0, 0, transaction_cost] * (len(ret_df.index) // 5) + [0] * (len(ret_df.index) % 5)
-
-    holdings = binary_signal.astype(int).shift(1)[five_yrs_ago_date:]
-    w = holdings.sum(axis=1)
-    w = (1 / w).replace([np.inf, -np.inf], 0)
-
-    port_ret = ((ret_df * holdings.mul(w, axis='index')).sum(axis=1) - pd.Series(arr_transaction_cost,
-                                                                                 index=w.index)).rename(
-        'Long').to_frame()
-    port_ret['Short'] = ret_b
+    port_ret['long'] = bt_tools.trend_trading(df,st_date, ed_date, sigs=sigs, transaction_cost=transaction_cost)
 
     port_ret = port_ret.fillna(0)
 
+
     ew_eq_curve = (port_ret + 1).cumprod()
 
+    # print(port_ret['long'])
+
     ## Long/ Short Side Plot
-    ew_eq_curve.plot(figsize=(100, 30), legend=True)
-    plt.title('Long Short Orig Portfolio')
-    if plot:
-        plt.show()
-    plt.close()
+
+    ax0s.append(ew_eq_curve['long'].plot(lw=0.75, ax=ax0, c='b'))
+    ax0s.append(ew_eq_curve['short'].plot(lw=0.75, ax=ax0, c='r'))
+    # plt.title(f"Long Short {index_name} Portfolio")
+
 
     ## combined PnL
+    combined_PnL = (port_ret['long'] - port_ret['short'] + 1).cumprod()
+    ax0s.append(combined_PnL.plot(lw=0.75, ax=ax1, c='g'))
 
-    combined_PnL = (port_ret['Long'] - port_ret['Short'] + 1).cumprod()
-    combined_PnL.plot(figsize=(100, 30), legend=True)
 
-    plt.title('Combined PnL Orig Port')
     if plot:
-        plt.show()
+        custom_lines = [Line2D([0], [0], color='b', lw=0.75),
+                        Line2D([0], [0], color='r', lw=0.75),
+                        Line2D([0], [0], color='g', lw=0.75)]
+
+        fig.legend(custom_lines, ['long', 'short','combined'], ncol=len(custom_lines),
+                   loc="upper center")
+        plt.setp(ax0s, ylabel='Cumulative Return')
+
+        plt.savefig(f"other_indices/{index_name}/pnls.png", bbox_inches='tight') #
     plt.close()
 
-    return combined_PnL, (1 + ret_b).cumprod()
+    return ew_eq_curve['long'], ew_eq_curve['short']
 
-def continuous_sig_bt(df, b_df, combined_PnL, sigs= (20,50,150), transaction_cost=0, plot=False):
+def continuous_sig_bt(df, b_df, combined_PnL, st_date, ed_date, sigs= (20,50,150), transaction_cost=0, plot=False):
 
-    today, five_yrs_ago_date = _bt_date()
 
-    b_df = b_df[five_yrs_ago_date:]
+
+    b_df = b_df[st_date:ed_date]
     ret_b = b_df.pct_change().fillna(0)
 
-    ret_df = df[five_yrs_ago_date:].pct_change()
+    ret_df = df[st_date:ed_date].pct_change()
 
     signal_fast, signal_slow = bt_tools.cont_trend_follow_sigs(df, sigs)
 
-    holdings_fast = np.sign(signal_fast).replace(-1, 0)[five_yrs_ago_date:]
-    holdings_slow = np.sign(signal_slow).replace(-1, 0)[five_yrs_ago_date:]
+    holdings_fast = np.sign(signal_fast).replace(-1, 0)[st_date:]
+    holdings_slow = np.sign(signal_slow).replace(-1, 0)[st_date:]
 
     w_fast = (1 / holdings_fast.sum(axis=1)).replace([np.inf, -np.inf], 0)
     w_slow = (1 / holdings_slow.sum(axis=1)).replace([np.inf, -np.inf], 0)
@@ -123,13 +115,13 @@ def continuous_sig_bt(df, b_df, combined_PnL, sigs= (20,50,150), transaction_cos
 
     combined_signal = norm_signal_fast * w_trading_rules[0] + norm_signal_slow * w_trading_rules[1]
 
-    combined_ew_ret_0, combined_ew_eq_curve_0 = bt_tools.simple_ew_backtester(combined_signal, ret_df, ret_b, five_yrs_ago_date
+    combined_ew_ret_0, combined_ew_eq_curve_0 = bt_tools.simple_ew_backtester(combined_signal, ret_df, ret_b, st_date
                                                                      , rules=0, transaction_cost=transaction_cost)
 
-    combined_ew_ret_1, combined_ew_eq_curve_1 = bt_tools.simple_ew_backtester(combined_signal, ret_df, ret_b, five_yrs_ago_date
+    combined_ew_ret_1, combined_ew_eq_curve_1 = bt_tools.simple_ew_backtester(combined_signal, ret_df, ret_b, st_date
                                                                      , rules=1, transaction_cost=transaction_cost)
 
-    combined_ew_ret_2, combined_ew_eq_curve_2 = bt_tools.simple_ew_backtester(combined_signal, ret_df, ret_b, five_yrs_ago_date
+    combined_ew_ret_2, combined_ew_eq_curve_2 = bt_tools.simple_ew_backtester(combined_signal, ret_df, ret_b, st_date
                                                                      , rules=2, transaction_cost=transaction_cost)
 
     combined_ew_eq_curve_0 = combined_ew_eq_curve_0.rename('0').to_frame()
@@ -141,27 +133,41 @@ def continuous_sig_bt(df, b_df, combined_PnL, sigs= (20,50,150), transaction_cos
 
     combined_ew_eq_curve_0.ffill(inplace=True)
 
-    combined_ew_eq_curve_0.plot(figsize=(100, 30), legend=True, title="Portfolios PnLs of Combined Continuous Signals")
-    if plot:
-        plt.show()
-    plt.close()
+
+    ew_0 = bt_tools.port_stats(combined_ew_eq_curve_0['0'], combined_ew_eq_curve_0['benchmark'])
+    ew_1 = bt_tools.port_stats(combined_ew_eq_curve_0['1'], combined_ew_eq_curve_0['benchmark'])
+    ew_2 = bt_tools.port_stats(combined_ew_eq_curve_0['2'], combined_ew_eq_curve_0['benchmark'])
+    orig = bt_tools.port_stats(combined_PnL, combined_ew_eq_curve_0['benchmark'])
+
+    print(pd.DataFrame({'orig':orig, 'ew_0': ew_0, 'ew_1': ew_1, 'ew_2':ew_2}).to_latex())
 
 
-def trend_follow(index, transaction_cost=0, sigs=(20,50,150), analysis=True):
+def trend_follow(index, transaction_cost=0, sigs=(20,50,150), analysis=True, plt_save_path=None):
 
     '''index: sp500, nasdaq100 or stoxx600   '''
-    today = pd.datetime.today().date()
-    start_bt_date_1yr_plus="-".join([str(today.year-6), str(today.month), str(today.day)])
-    end_bt_date=today
+
+
+    end_bt_date="2020-09-13"
+    start_bt_date_1yr_plus="-".join([str(pd.to_datetime(end_bt_date).year-6), str(pd.to_datetime(end_bt_date).month), str(pd.to_datetime(end_bt_date).day)])
+    start_bt_date = "-".join([str(pd.to_datetime(end_bt_date).year-5), str(pd.to_datetime(end_bt_date).month), str(pd.to_datetime(end_bt_date).day)])
+
 
 
     df, b_df = getattr(bt_tools, f"get_df_{index}")(start_bt_date_1yr_plus=start_bt_date_1yr_plus, end_bt_date=end_bt_date)
-    orig_combined_PnL, b_equity_curve = orig_long_trend_bt(df, b_df, sigs=sigs, plot=True, transaction_cost=transaction_cost)
+
+    long_equity_curve, short_equity_curve= orig_long_trend_bt(df, b_df, st_date=start_bt_date, ed_date=end_bt_date,
+                                                               sigs=sigs, plot=True, transaction_cost=transaction_cost, index_name=index)
+
+    if index=='ftse250':
+        continuous_sig_bt(df, b_df, long_equity_curve,
+                          st_date=start_bt_date, ed_date=end_bt_date, sigs=sigs, plot=False, transaction_cost=transaction_cost)
+
     if analysis:
-        print(bt_tools.performance_analysis(orig_combined_PnL, b_equity_curve, port_name=f"{index}_{sigs}", plot=True))
+        if plt_save_path!=None:
+            bt_tools.performance_analysis(long_equity_curve, short_equity_curve, port_name=f"{index}_{sigs}", plot=False, plt_save_path=plt_save_path)
+        return bt_tools.port_stats(long_equity_curve, short_equity_curve)
+    # continuous_sig_bt(df, b_df, orig_combined_PnL, sigs=sigs, plot=True, transaction_cost=transaction_cost)
 
-    continuous_sig_bt(df, b_df, orig_combined_PnL, sigs=sigs, plot=True, transaction_cost=transaction_cost)
-
-    return orig_combined_PnL
+    # return orig_combined_PnL
 
 
