@@ -1,5 +1,4 @@
 import bt_tools
-import ray
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -7,7 +6,7 @@ from scipy.stats import mstats
 from matplotlib.lines import Line2D
 import pickle
 import seaborn as sns; sns.set_theme()
-from itertools import permutations
+from itertools import permutations, combinations
 from tqdm import tqdm
 
 ed_date = '2010-01-01' # '2020-09-13'
@@ -18,13 +17,8 @@ start_bt_date_1yr_plus = '2005-01-01' # '2013-09-13'
 index = 'sp500'
 direction = 'short' ## long
 rules_range = range(5,205, 5)
-print(len(rules_range))
 
 
-ray.init()
-
-
-@ray.remote
 def opt_sigs(sigs, df, st_date= st_date, ed_date= ed_date, direction='long'):
 
     sharpe_r, end_pnl = bt_tools.perf_trend_trading(sigs, df, st_date= st_date, ed_date= ed_date, direction=direction)
@@ -37,15 +31,20 @@ def opt_sigs(sigs, df, st_date= st_date, ed_date= ed_date, direction='long'):
 
 df, b_df = getattr(bt_tools, f"get_df_{index}")(start_bt_date_1yr_plus=start_bt_date_1yr_plus, end_bt_date=ed_date)
 
-df_id = ray.put(df)
 
 
+# futures = []
+#
+# for i,j, k in tqdm([sorted((i,j,k)) for i,j,k in list(combinations(range(5, 205,5),3))]):
+#     futures.append(opt_sigs(sigs=(i,j,k), df=df, direction=direction))
 
 
-futures = [opt_sigs.remote(sigs=(i,j,k), df=df_id, direction=direction)
-           for i,j,k in [(i,j,k) for i,j,k in  list(permutations(range(5, 205,5),3)) if i<j<k]]
+## custom set of periods to try first
 
-results = ray.get(futures)
+periods_combo = list(combinations((10,20,25,30,40,50,60,70,150,160,170, *(190,195,200, 205)), 3))
+results = [opt_sigs(sigs=(i,j,k), df=df, direction=direction)
+           for i,j, k in tqdm([sorted((i,j,k)) for i,j,k in periods_combo])] #205 list(combinations(range(5, 205 ,5),3))])
+
 results = pd.DataFrame(results, columns=['sigs','sharpe','end_pnl'])
 results.to_pickle(f"{direction}_trend_{index}_rules.pkl")
 

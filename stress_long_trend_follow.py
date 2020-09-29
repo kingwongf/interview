@@ -1,10 +1,11 @@
-from bt_tools import get_df_stoxx600, performance_analysis, trend_follow_sigs, df_sanity_check, port_stats, trend_trading
+from bt_tools import get_df_stoxx600, performance_analysis, trend_follow_sigs, df_sanity_check, port_stats, trend_trading, sharpe
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import seaborn as sns; sns.set_theme()
 from matplotlib.lines import Line2D
-
+from tqdm import tqdm
+import itertools
 
 def stress_trend_follow(direction='Pos Deviations', start_bt_date= '2007-01-01', end_bt_date= '2010-01-01'):
     dev_name = direction  ##
@@ -36,6 +37,7 @@ def stress_trend_follow(direction='Pos Deviations', start_bt_date= '2007-01-01',
 
     labels = []
     long_end_PnLs = []
+    long_mean_Sharpe = []
     for i, plus_t in enumerate(deviations):
         new_sigs = list(map(lambda x: x+plus_t, sigs))
         temp_fast, temp_mid, temp_slow = trend_follow_sigs(df, new_sigs)
@@ -70,8 +72,9 @@ def stress_trend_follow(direction='Pos Deviations', start_bt_date= '2007-01-01',
             ## combined PnL
             combined_PnL = (port_ret['long'] - port_ret['index'] - arr_transaction_cost + 1).cumprod()
             combined_PnL.plot(ax=ax1, lw=0.70, c=cmaps[i])
-
+        ## bar EndPnL
         long_end_PnLs.append((",".join(map(str,new_sigs)), ew_eq_curve['long'].tail(1).values[0]))
+        long_mean_Sharpe.append((",".join(map(str,new_sigs)), sharpe(ew_eq_curve['long'])))
 
 
 
@@ -92,29 +95,36 @@ def stress_trend_follow(direction='Pos Deviations', start_bt_date= '2007-01-01',
                # fontsize='small',
                ncol=len(labels))
 
-    # plt.subplots_adjust(left=0.03, bottom=0.04, right=0.99, top=0.90, wspace=0.08, hspace=0.01)
-    # fig.suptitle(f"Cumulative Returns of Trading Rules {dev_name}")
-    # plt.ylabel('Cumulative Return')
     plt.setp(ax0s, ylabel='Cumulative Return')
     # plt.show()
     plt.savefig(f"stress_trend_follow/pnl_{direction.lower().replace(' ','_')}.png", bbox_inches='tight')
     plt.close()
 
 
-    long_end_PnLs = pd.DataFrame(long_end_PnLs, columns=['sig','PnL'])
-
+    ## Bar mean Sharpe ratio
+    long_mean_Sharpe = pd.DataFrame(long_mean_Sharpe, columns=['sig', 'sharpe'])
 
     fig, ax = plt.subplots(1, 1, figsize=(5, 3.5), dpi=800)
+    ax.bar(long_mean_Sharpe['sig'], long_mean_Sharpe['sharpe'])
+    plt.xticks(rotation=90, fontsize=6)
+    plt.ylabel('avg. annual Sharpe')
+    # plt.show()
+    plt.savefig(f"stress_trend_follow/bar_mean_sharpe_{direction.lower().replace(' ', '_')}.png", bbox_inches='tight')
+    plt.close()
 
+
+    ## Bar End PnL
+    long_end_PnLs = pd.DataFrame(long_end_PnLs, columns=['sig','PnL'])
+
+    fig, ax = plt.subplots(1, 1, figsize=(5, 3.5), dpi=800)
     ax.bar(long_end_PnLs['sig'], long_end_PnLs['PnL'])
-    # plt.figure(figsize=(5, 3.5))
-    # plt.rcParams["figure.dpi"] = 800
     plt.xticks(rotation=90, fontsize=6)
     plt.ylabel('End Cumulative Return')
-    # plt.title(f"End PnL of Trading Rules {dev_name}")
     # plt.show()
     plt.savefig(f"stress_trend_follow/bar_end_{direction.lower().replace(' ', '_')}.png", bbox_inches='tight')
     plt.close()
+
+
 
 
 def structural_pred(start_bt_date= '2007-01-01', end_bt_date= '2010-01-01'):
@@ -135,7 +145,7 @@ def structural_pred(start_bt_date= '2007-01-01', end_bt_date= '2010-01-01'):
 
 
     df, stoxx600 = get_df_stoxx600(start_bt_date_1yr_plus=start_bt_date_1yr_plus, end_bt_date=end_bt_date)
-    transaction_cost = 0.0010
+    transaction_cost = 0.0000
 
     ret_stoxx600 = stoxx600[start_bt_date:].pct_change().fillna(0)
     eq_curve_stoxx600 = (ret_stoxx600 + 1).cumprod()

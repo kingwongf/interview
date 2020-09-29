@@ -1,4 +1,5 @@
 import pandas as pd
+import swifter
 import numpy as np
 from datetime import date
 import matplotlib.pyplot as plt
@@ -199,24 +200,57 @@ def get_position_df(df, entry_df, exit_df):
 def equal_weighting(pos_df):
     return (1 / pos_df.sum(axis=1)).replace([np.inf, -np.inf], 0)
 
-def equal_risk_weighting(df):
-    ret_df = df.pct_change()
-    ## TODO: finish the vcv
-    risk_parity_weighting(vcv, 'equal')
+def equal_risk_weighting(df, pos2_df,st_date, ed_date):
+    w_df = pd.DataFrame(columns=pos2_df.columns, index=pos2_df.index)
 
-def trend_trading_2(df, entry, exit, st_date, ed_date, arr_transaction_cost=0):
+    for date, row in pos2_df.loc[st_date:ed_date].iterrows():
+        temp_cov = df[[t for t in row.index if row[t] == 1]].loc[:date].iloc[-252:].pct_change().cov()  #
 
-    pos2_df = get_position_df(df, entry, exit)
+        w = risk_parity_weighting(temp_cov.values)
 
-    w = equal_weighting(pos2_df)
+        w_df.loc[date, temp_cov.columns] = w
 
-    w_holdings = pos2_df.mul(w, axis='index')
+    return w_df
+
+
+
+
+def trend_trading_2(df, w, pos_df, st_date, ed_date, arr_transaction_cost=0, direction='long'):
+
+    # pos2_df = get_position_df(df, entry, exit)
+
+    # w = equal_weighting(pos2_df)
+    # w_holdings = pos2_df.mul(w, axis='index')
+
+
+    # w = cap_w_sp500()
+    w_holdings = pos_df * w
 
     ret_df = df.loc[st_date:ed_date].pct_change().fillna(0)
 
-    long_side_ret = ((ret_df * w_holdings).sum(axis=1) - pd.Series(arr_transaction_cost, index=ret_df.index))
-    return long_side_ret
+    ret_df = -1 * ret_df if direction == 'short' else ret_df
+    port_ret = ((ret_df * w_holdings).sum(axis=1) - pd.Series(arr_transaction_cost, index=ret_df.index))
+    return port_ret
 
+
+def perf_trend_trading(sigs, df, st_date= '2007-01-01', ed_date= '2010-01-01', direction='long'):
+    fast_MA, mid_MA, slow_MA = trend_follow_sigs(df, sigs)
+
+    entry_sig = ((fast_MA > mid_MA) & (mid_MA > slow_MA)).astype(int) if direction == 'long' else ((fast_MA < mid_MA) &(mid_MA < slow_MA)).astype(int)
+    exit_sig = ((fast_MA < mid_MA) & (mid_MA > slow_MA)).astype(int) if direction == 'long' else ((fast_MA > mid_MA) & (mid_MA <  slow_MA)).astype(int)
+    pos_df = get_position_df(df, entry_sig, exit_sig)
+
+    eq_risk_w = equal_risk_weighting(df, pos_df, st_date, ed_date)
+
+    port_ret = trend_trading_2(df, eq_risk_w, pos_df, st_date, ed_date).fillna(0)
+
+    port_ret = port_ret if direction == 'long' else -1 * port_ret
+
+    eq_curve = (1 + port_ret).cumprod()
+
+    sharpe_r = sharpe(eq_curve)
+
+    return sharpe_r, eq_curve[-1]
 
 def check_short_trend_trading(sigs=(20,50,150), transaction_cost=0):
 
@@ -286,18 +320,30 @@ def alph_beta(equity_curve, b_equity_curve):
     ret_df['b'] = b_equity_curve.pct_change()
     ret_df = ret_df.dropna()
     res = sm.OLS(ret_df['p'], sm.add_constant(ret_df['b'])).fit()
-    return res.params[0], res.params[1]
+    return res.params[0], res.params[1], ret_df
+
+
+def sharpe(equity_curve):
+    equity_curve.copy()
+    rf = pd.read_csv("uk_10yr_gilt.csv", index_col=['Date'])['IUDMNPY']*0.01
+    rf.index = pd.to_datetime(rf.index)
+
+    yr_ret_port_df = equity_curve.resample('1y').last().pct_change(1)
+
+    yr_ret_port_df = yr_ret_port_df - rf
+    annual_std = (equity_curve.pct_change(252)).resample('1y').std().replace([-np.inf, np.inf], np.nan)
+
+    return np.mean(yr_ret_port_df/annual_std)
 
 def port_stats(equity_curve, b_equity_curve):
+
+    ## annual mean Sharpe
+    sharpe_r = sharpe(equity_curve)
+
+    ## Reg Alpha Beta
+    reg_a, reg_b, ret_df = alph_beta(equity_curve, b_equity_curve)
+
     port_ret = equity_curve.pct_change().dropna()
-
-    ret_df = equity_curve.rename('p').to_frame().pct_change()
-    ret_df['b'] = b_equity_curve.pct_change()
-    ret_df = ret_df.dropna()
-
-    res = sm.OLS(ret_df['p'], sm.add_constant(ret_df['b'])).fit()
-
-
     ## avg. alpha
     avg_alpha = np.mean(ret_df['p'] - ret_df['b'])
 
@@ -318,10 +364,11 @@ def port_stats(equity_curve, b_equity_curve):
 
     end_PnL = (ret_df['p'] - ret_df['b'] +1).cumprod()[-1]
 
-    return pd.Series([end_PnL,
+    return pd.Series([sharpe_r,
+                      end_PnL,
                       avg_alpha,
-                      res.params[0],
-                      res.params[1],
+                      reg_a,
+                      reg_b,
                       port_ret.std(),
                       min(equity_curve.rolling(126).apply(dd).dropna()),
                       np.mean(annual_IR)], index=['Profit', 'avg. alpha', 'reg. alpha', 'reg. beta', 'Daily Vol', 'MaxDD', 'IR'])
